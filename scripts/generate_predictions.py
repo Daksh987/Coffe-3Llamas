@@ -8,29 +8,71 @@ expects:
 
     { "<prompt>": [["<output_str>"], true], ... }
 
-Issue #11 scaffolding: this version writes empty stub completions so the
-output schema, file layout, CLI, and resumability can be validated without
-spending API budget. Issue #12 replaces `call_model()` with real API calls.
+Defaults target Groq's OpenAI-compatible endpoint, but `--api-endpoint` and
+`--api-key` let you swap providers. API key is read from $GROQ_API_KEY (or a
+project-root .env file with `GROQ_API_KEY=...`) unless `--api-key` is passed.
 """
 import argparse
 import json
+import os
 import sys
+import time
 from pathlib import Path
+
+from openai import OpenAI
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CHECKPOINT_EVERY = 50
+CHECKPOINT_EVERY = 25
+DEFAULT_ENDPOINT = "https://api.groq.com/openai/v1"
+DEFAULT_API_KEY_ENV = "GROQ_API_KEY"
+MAX_RETRIES = 5
+RETRY_BASE_DELAY = 2  # exponential: 2, 4, 8, 16, 32 seconds
+TEMPERATURE = 0.0
+MAX_TOKENS = 2048
 
 
-def call_model(prompt: str, model_name: str) -> str:
-    """Generate one completion for one prompt. Stub for #11; real API in #12."""
+def load_dotenv(path: Path = REPO_ROOT / ".env") -> None:
+    """Minimal .env loader so we don't pull in python-dotenv as a dep."""
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        v = v.strip().strip('"').strip("'")
+        os.environ.setdefault(k.strip(), v)
+
+
+def call_model(prompt: str, client: OpenAI, model_id: str) -> str:
+    """Generate one completion. Retries on transient errors; returns "" if all retries exhausted."""
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = client.chat.completions.create(
+                model=model_id,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=TEMPERATURE,
+                max_tokens=MAX_TOKENS,
+            )
+            return resp.choices[0].message.content or ""
+        except Exception as e:
+            wait = RETRY_BASE_DELAY ** (attempt + 1)
+            print(
+                f"    API error (attempt {attempt + 1}/{MAX_RETRIES}): {type(e).__name__}: {e}; "
+                f"sleeping {wait}s",
+                file=sys.stderr,
+            )
+            time.sleep(wait)
+    print(
+        f"    WARNING: gave up after {MAX_RETRIES} retries; storing empty string",
+        file=sys.stderr,
+    )
     return ""
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Generate COFFE predictions for one model.",
-    )
+    p = argparse.ArgumentParser(description="Generate COFFE predictions for one model.")
     p.add_argument(
         "--benchmark",
         choices=["function", "file"],
@@ -40,12 +82,33 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--model-name",
         required=True,
-        help="Model name used for the output filename, e.g. 'Llama4_Maverick'.",
+        help="Name used for the output filename, e.g. 'Llama4_Maverick'.",
+    )
+    p.add_argument(
+        "--model-id",
+        default=None,
+        help="Model identifier sent to the API (default: same as --model-name).",
+    )
+    p.add_argument(
+        "--api-key",
+        default=None,
+        help=f"API key (default: read from ${DEFAULT_API_KEY_ENV} or .env).",
+    )
+    p.add_argument(
+        "--api-endpoint",
+        default=DEFAULT_ENDPOINT,
+        help=f"OpenAI-compatible API base URL (default: {DEFAULT_ENDPOINT}).",
     )
     p.add_argument(
         "--output-dir",
         default=None,
         help="Output directory (default: examples/<benchmark>/).",
+    )
+    p.add_argument(
+        "--max-prompts",
+        type=int,
+        default=None,
+        help="Cap the number of new prompts to send (for testing). Default: all.",
     )
     return p.parse_args()
 
@@ -74,11 +137,30 @@ def save(output_file: Path, results: dict) -> None:
     output_file.write_text(json.dumps(results, indent=2), encoding="utf-8")
 
 
+def resolve_api_key(cli_value: str | None) -> str:
+    if cli_value:
+        return cli_value
+    load_dotenv()
+    key = os.environ.get(DEFAULT_API_KEY_ENV)
+    if not key:
+        sys.exit(
+            f"ERROR: no API key. Pass --api-key, set ${DEFAULT_API_KEY_ENV}, "
+            f"or put `{DEFAULT_API_KEY_ENV}=...` in {REPO_ROOT / '.env'}"
+        )
+    return key
+
+
 def main() -> int:
     args = parse_args()
+    api_key = resolve_api_key(args.api_key)
+    model_id = args.model_id or args.model_name
+
+    client = OpenAI(api_key=api_key, base_url=args.api_endpoint)
 
     prompts = load_prompts(args.benchmark)
     print(f"Loaded {len(prompts)} prompts from datasets/{args.benchmark}/prompts.json")
+    print(f"Endpoint: {args.api_endpoint}")
+    print(f"Model ID: {model_id}")
 
     output_dir = (
         Path(args.output_dir)
@@ -89,21 +171,25 @@ def main() -> int:
 
     results = load_existing(output_file)
     if results:
-        print(f"Resuming — {len(results)} prompts already in {output_file}")
+        print(f"Resuming - {len(results)} prompts already in {output_file}")
 
     new_count = 0
     for i, prompt in enumerate(prompts):
         if prompt in results:
             continue
-        completion = call_model(prompt, args.model_name)
+        if args.max_prompts is not None and new_count >= args.max_prompts:
+            print(f"Hit --max-prompts={args.max_prompts} cap; stopping.")
+            break
+        completion = call_model(prompt, client, model_id)
         results[prompt] = [[completion], True]
         new_count += 1
+        print(f"  [{i + 1}/{len(prompts)}] generated ({len(completion)} chars)")
         if new_count % CHECKPOINT_EVERY == 0:
             save(output_file, results)
-            print(f"  [{i + 1}/{len(prompts)}] checkpoint saved")
+            print(f"  checkpoint saved")
 
     save(output_file, results)
-    print(f"Done — wrote {len(results)} predictions to {output_file}")
+    print(f"Done - wrote {len(results)} predictions to {output_file}")
     return 0
 
 
