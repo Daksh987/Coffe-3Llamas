@@ -14,4 +14,7 @@ COPY . /Coffe
 
 RUN cd /Coffe && pip install .
 
-RUN cd .. && coffe init -d Coffe/datasets -w /
+# Note: `coffe init` is intentionally NOT run here. It calls Collector() to
+# verify perf_event_open works, which needs the seccomp profile applied at
+# `docker run` time — not available during `docker build`. Init is run on
+# the host instead (see README step 3).

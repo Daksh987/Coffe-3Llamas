@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(wsl --list *)",
+      "PowerShell(wsl --status *)",
+      "PowerShell(docker ps *)",
+      "PowerShell(docker info *)",
+      "PowerShell(docker version *)",
+      "PowerShell(docker images *)",
+      "PowerShell(docker logs *)",
+      "PowerShell(docker inspect *)"
+    ]
+  }
+}
