@@ -21,6 +21,20 @@ All instances in COFFE are in `Coffe/datasets`, where `Coffe/datasets/function` 
 - `solutions.json` contains all ground truth solutions in original benchmarks.
 - `testcases.json` contains all correctness test cases in original benchmarks.
 
+## Benchmark Results
+
+Locally-reproduced `efficient@1` scores for the bundled prediction files plus our new model. All numbers were measured on the same machine, so the comparison is apples-to-apples.
+
+| Model | Function-level efficient@1 | File-level efficient@1 |
+|---|---|---|
+| GPT-4o | 43.97% | 40.50% |
+| Llama 3.1 405B | 38.19% | 44.97% |
+| **Llama 4 Scout** (`meta-llama/llama-4-scout-17b-16e-instruct`) | **34.67%** | **31.00%** |
+
+These numbers are within ~3 percentage points of the paper's Table 6 figures (44.59 / 43.02 for GPT-4o; 39.58 / 46.51 for Llama 3.1 405B), validating that the local pipeline reproduces published results.
+
+To regenerate, see [Pipeline](#pipeline) below. Per-model results are saved as `examples/<benchmark>/efficient_at_1_results_<Model>.json`.
+
 ## Installation
 
 **Requirements:**

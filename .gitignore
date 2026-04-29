@@ -130,6 +130,9 @@ celerybeat.pid
 # Environments
 .env
 .venv
+
+# COFFE per-machine init config — contains absolute paths for the local workdir
+coffe_init.json
 env/
 venv/
 ENV/
