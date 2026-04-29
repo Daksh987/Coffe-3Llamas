@@ -34,6 +34,8 @@ We suggest you create a virtural environment before installing COFFE.
 ```bash
 cd Coffe && pip install .
 ```
+> **Developers modifying the source code:** use `pip install -e .` instead. This installs COFFE in editable mode so any changes to the source are reflected immediately without reinstalling. If you use a virtual environment manager (e.g. pipenv), make sure to run the install inside the same environment your shell uses to invoke `coffe` — installing into the wrong environment means your changes will be silently ignored.
+
 2. COFFE comes with a docker image, to install it:
 ```bash
 docker build . -t coffe
@@ -86,6 +88,7 @@ coffe pipe <benchmark_name> <output_repo>
 -p <pred_file_1>,...,<pred_file_n> 
 -f <efficient_at_1/speedup> 
 -n <number_of_workers>
+[--measure <instr_count/time>]
 ```
 This command has four phases:
 1. santize the predictions.
@@ -93,9 +96,15 @@ This command has four phases:
 3. evaluate the GPU instruction count based on stressful test cases.
 4. calculate the final metrics.
 
+The `--measure` flag controls how step 3 measures performance. The default is `instr_count` (CPU instruction counting), which requires Linux with perf permissions. Pass `--measure time` to use wall-clock time instead, which works on any system.
+
 For example:
 ```bash
 coffe pipe function Coffe/examples/function -p Coffe/examples/function/GPT-4o.json -f efficient_at_1 -n 8
+```
+To measure wall-clock time instead of instruction count:
+```bash
+coffe pipe function Coffe/examples/function -p Coffe/examples/function/GPT-4o.json -f efficient_at_1 -n 8 --measure time
 ```
 This command evaluates the predictions from GPT-4o on the function-level instances of COFFE. If you want to evaluate other LLMs, please prepare a `JSON` file with the same format as `Coffe/examples/function/GPT-4o.json`. 
 
@@ -155,6 +164,82 @@ This command calculate the efficient@1 or speedup.
 
 **Note:**
 This command requires the index file and the instruction file as COFFE compares the performance of predictions with grouth truth solutions to calculate the metrics.
+
+## Mac Setup
+
+macOS does not support CPU instruction counting via `perf_event_open`, so COFFE uses wall-clock time measurement instead. The setup differs from Linux in two ways: an editable install, and the `--measure time` flag on all pipeline runs.
+
+**Requirements:**
+- macOS (Apple Silicon or Intel)
+- Docker Desktop (must be running before each evaluation)
+- Python 3.10+
+- pipenv (`pip install pipenv`)
+
+### Automated Setup
+
+Run the provided script from the repo root:
+
+```bash
+cd Coffe-3Llamas
+chmod +x setup_mac.sh
+./setup_mac.sh
+```
+
+This handles all steps below automatically.
+
+### Manual Setup
+
+**1. Install COFFE in editable mode**
+
+Install directly into the Python environment your shell uses (not via `pipenv run`):
+
+```bash
+cd Coffe-3Llamas
+pip install -e .
+```
+
+Verify it points to your source files, not a cached copy in `site-packages`:
+
+```bash
+python3 -c "import coffe.main; import inspect; print(inspect.getfile(coffe.main))"
+```
+
+The output should be a path inside your repo (e.g. `.../Coffe-3Llamas/coffe/main.py`), not a `site-packages` path. If it shows `site-packages`, your shell is using a different Python environment — find its `pip` and re-run the install against it (e.g. `/path/to/venv/bin/pip install -e .`).
+
+**2. Build the Mac Docker image**
+
+Use the default `Dockerfile`:
+
+```bash
+docker build --no-cache . -t coffe
+```
+
+You will see a warning about CPU instruction counting — this is expected on Mac.
+
+**3. Initialize COFFE**
+
+Run from your workspace directory (the parent of the repo):
+
+```bash
+cd ..
+coffe init -d Coffe-3Llamas/datasets -w $(pwd) -p Coffe-3Llamas/perf.json
+```
+
+### Running the Pipeline on Mac
+
+Add `--measure time` to all `coffe pipe` commands:
+
+```bash
+coffe pipe function Coffe-3Llamas/examples/function \
+  -p Coffe-3Llamas/examples/function/GPT-4o.json \
+  -f efficient_at_1 \
+  -n 4 \
+  --measure time
+```
+
+This uses wall-clock time instead of CPU instruction count. Results are saved to a file ending with `_STRESSFUL_TIME.json` instead of `_STRESSFUL_INSTRUCTION.json`.
+
+**Note:** Docker Desktop must be open and running before each evaluation.
 
 ## STGen
 
