@@ -34,10 +34,12 @@ def init(args):
     try:
         with Collector() as c:
             time.sleep(0.1)
+        if c.counters.instruction_count <= 0:
+            raise Exception()
+        print(colored("CPU instruction counting is supported on this system.", "green"))
     except:
-        raise OSError(f"Your OS does not support measuring CPU instruction counts.")
-    if c.counters.instruction_count <= 0:
-        raise OSError(f"Your OS does not support measuring CPU instruction counts.")
+        print(colored("Warning: CPU instruction counting is not available on this system. "
+                      "Use --measure time when running the pipeline.", "yellow"))
     
     for benchmark in benchmarks:
         dataset = Dataset(benchmark, data_path = os.path.join(dataset_path, benchmarks[benchmark]["path"]))
@@ -163,6 +165,12 @@ def pipe(args):
 
     args.checked_init = True
 
+    # Determine measurement mode: CPU instruction count (default) or wall-clock time.
+    measure = getattr(args, 'measure', 'instr_count')
+    if sys.platform == 'darwin' and measure == 'instr_count':
+        measure = 'time'
+    result_suffix = "_STRESSFUL_INSTRUCTION.json" if measure == "instr_count" else "_STRESSFUL_TIME.json"
+
     if args.final_metric not in ["speedup", "efficient_at_1"]:
         raise ValueError("The final metric could only be speedup or efficient_at_1 in pipeline mode.")
 
@@ -174,7 +182,7 @@ def pipe(args):
 
     
     print(colored("+++++++++++Step 1: Checking Syntax Errors...", "green"))
-    command = 'coffe eval ' + ' '.join(sys.argv[2:]).replace("-f ", "").replace(final_metric, "")
+    command = 'coffe eval ' + ' '.join(sys.argv[2:]).replace("-f ", "").replace(final_metric, "").replace("--measure " + measure, "")
     command += " -m compilable_rate"
     args.metric = "compilable_rate"
     print(f"Executing Command: {command}...")
@@ -183,7 +191,7 @@ def pipe(args):
     print(colored("Done!", "green"))
 
     print(colored("+++++++++++Step 2: Checking Correctness...", "green"))
-    command = 'coffe eval ' + ' '.join(sys.argv[2:]).replace(args.metric, "correctness").replace("-f ", "").replace(final_metric, "")
+    command = 'coffe eval ' + ' '.join(sys.argv[2:]).replace(args.metric, "correctness").replace("-f ", "").replace(final_metric, "").replace("--measure " + measure, "")
     command = command.replace(ori_prediction, ori_prediction.replace(".json", "_SOLUTIONS.json"))
     command += " -m correctness"
     args.prediction = ori_prediction.replace(".json", "_SOLUTIONS.json")
@@ -194,37 +202,38 @@ def pipe(args):
     print(colored("Done!", "green"))
     args.stressful = True
 
-    print(colored("+++++++++++Step 3: Measuring GPU Instruction Count...", "green"))
+    step3_label = "CPU Instruction Count" if measure == "instr_count" else "Execution Time"
+    print(colored(f"+++++++++++Step 3: Measuring {step3_label}...", "green"))
     if "," in ori_prediction:
         dirname = os.path.dirname(ori_prediction.split(",")[-1])
     else:
         dirname = os.path.dirname(ori_prediction)
     dataset_name = args.dataset.replace("/", "_")
     args.prediction = os.path.join(dirname, f"{dataset_name}_all_PASSED_SOLUTIONS.json")
-    command = 'coffe eval ' + ' '.join(sys.argv[2:]).replace(args.metric, "instr_count").replace("-f ", "").replace(final_metric, "")
+    command = 'coffe eval ' + ' '.join(sys.argv[2:]).replace(args.metric, measure).replace("-f ", "").replace(final_metric, "").replace("--measure " + measure, "")
     command = command.replace(ori_prediction, args.prediction)
-    command += " -m instr_count"
+    command += f" -m {measure}"
 
     if args.dataset in ["codeparrot/apps", "deepmind/code_contests", "file"] and "generator" not in args.extra_options:
         args.extra_options = "generator"
         command += " -e generator"
-    
-    args.metric = "instr_count"
+
+    args.metric = measure
     print(f"Executing Command: {command}...")
     args.command = command
     eval(args)
     print(colored("Done!", "green"))
 
-    print(colored("Measurement Finished. CPU instruction count results stored into {}".format(args.prediction.replace("_PASSED_SOLUTIONS.json", "_STRESSFUL_INSTRUCTION.json")), "green"))
-    
+    print(colored("Measurement Finished. Results stored into {}".format(args.prediction.replace("_PASSED_SOLUTIONS.json", result_suffix)), "green"))
+
     print(colored("+++++++++++Step 4: Calculating Metrics...", "green"))
     args.final_metric = final_metric
     args.single_worker = False
-    command = 'coffe eval ' + ' '.join(sys.argv[2:])
-    command = command.replace(ori_prediction, args.prediction.replace("_PASSED_SOLUTIONS.json", "_indexes.json") + "," + args.prediction.replace("_PASSED_SOLUTIONS.json", "_STRESSFUL_INSTRUCTION.json"))
-    command += " -m instr_count"
-    args.prediction =  args.prediction.replace("_PASSED_SOLUTIONS.json", "_indexes.json") + "," + args.prediction.replace("_PASSED_SOLUTIONS.json", "_STRESSFUL_INSTRUCTION.json")
-    args.metric = "instr_count"
+    command = 'coffe eval ' + ' '.join(sys.argv[2:]).replace("--measure " + measure, "")
+    command = command.replace(ori_prediction, args.prediction.replace("_PASSED_SOLUTIONS.json", "_indexes.json") + "," + args.prediction.replace("_PASSED_SOLUTIONS.json", result_suffix))
+    command += f" -m {measure}"
+    args.prediction = args.prediction.replace("_PASSED_SOLUTIONS.json", "_indexes.json") + "," + args.prediction.replace("_PASSED_SOLUTIONS.json", result_suffix)
+    args.metric = measure
     print(f"Executing Command: {command}...")
     args.command = command
     eval(args)
@@ -268,6 +277,7 @@ def main():
     pipeline_parser.add_argument('-e', '--extra_options', required = False, default = "", type = str, help = "Extra options for the evaluation")
     pipeline_parser.add_argument('-x', '--host_machine', required = False, default = False, action = "store_true", help = "Running code on host machine instead of calling docker containers. DANGEROUS!")
     pipeline_parser.add_argument('-f', '--final_metric', required = False, type = str, help = "The final metric calculated based on the measurement results, can be speedup or efficient_at_1.")
+    pipeline_parser.add_argument('--measure', required = False, default = 'instr_count', choices = ['instr_count', 'time'], help = "Measurement method: instr_count (default, requires Linux) or time (works on macOS via Docker).")
     pipeline_parser.set_defaults(func = pipe)
 
 
