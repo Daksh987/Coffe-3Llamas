@@ -90,8 +90,8 @@ echo ""
 echo -e "${BLUE}[Step 2/3] Building Docker image...${NC}"
 echo -e "${YELLOW}Note: You will see a warning about CPU instruction counting — this is expected on Mac.${NC}"
 echo ""
-echo "running: docker build --no-cache . -t coffe"
-docker build --no-cache . -t coffe
+echo "running: docker build --no-cache -f Dockerfile.mac . -t coffe"
+docker build --no-cache -f Dockerfile.mac . -t coffe
 echo ""
 echo -e "${GREEN}✓ Docker image built${NC}"
 echo ""
